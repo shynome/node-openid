@@ -1,0 +1,1 @@
+export { RelyingParty } from './openid'

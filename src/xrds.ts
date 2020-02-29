@@ -22,13 +22,19 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  *
- * -*- Mode: JS; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set sw=2 ts=2 et tw=80 :
  */
+
+export interface Service {
+  type: string
+  priority: number
+  uri: string
+  id: string
+  delegate: string
+}
 
 export const parse = (data: string) => {
   data = data.replace(/\r|\n/g, '')
-  var services = []
+  var services: Service[] = []
   var serviceMatches = data.match(
     /<Service\s*(priority="\d+")?.*?>(.*?)<\/Service>/g,
   )
@@ -39,7 +45,7 @@ export const parse = (data: string) => {
 
   for (var s = 0, len = serviceMatches.length; s < len; ++s) {
     var service = serviceMatches[s]
-    var svcs = []
+    var svcs: Service[] = []
     var priorityMatch = /<Service.*?priority="(.*?)".*?>/g.exec(service)
     var priority = 0
     if (priorityMatch) {
@@ -49,7 +55,7 @@ export const parse = (data: string) => {
     var typeMatch = null
     var typeRegex = new RegExp('<Type(\\s+.*?)?>(.*?)<\\/Type\\s*?>', 'g')
     while ((typeMatch = typeRegex.exec(service))) {
-      svcs.push({ priority: priority, type: typeMatch[2] })
+      svcs.push({ priority: priority, type: typeMatch[2] } as any)
     }
 
     if (svcs.length == 0) {
@@ -76,6 +82,7 @@ export const parse = (data: string) => {
 
     var delegateMatch = /<(.*?Delegate)\s*?>(.*)<\/\1\s*?>/g.exec(service)
     if (delegateMatch) {
+      // @ts-ignore
       svc.delegate = delegateMatch[2]
     }
 

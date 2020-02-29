@@ -25,23 +25,15 @@
  */
 
 import crypto from 'crypto'
-import request from 'request'
 import axios from 'axios'
 import querystring from 'querystring'
 import * as xrds from './xrds'
 import url from 'url'
+import { hasOwnProperty } from './utils'
 
-var _associations = {}
+var _associations: { [k: string]: Association } = {}
 var _discoveries: { [k: string]: Provider } = {}
-var _nonces = {}
-
-var AX_MAX_VALUES_COUNT = 1000
-
-var openid = exports
-
-function hasOwnProperty(obj: object, prop: string) {
-  return Object.prototype.hasOwnProperty.call(obj, prop)
-}
+var _nonces: { [k: string]: Date } = {}
 
 export class RelyingParty {
   public constructor(
@@ -88,7 +80,10 @@ const authenticate = async (
   }
 
   var providerIndex = -1
-  const chooseProvider = async (error?: Error, authUrl?: string) => {
+  const chooseProvider = async (
+    error?: Error,
+    authUrl?: string,
+  ): Promise<string> => {
     if (!error && authUrl) {
       var provider = providers[providerIndex]
 
@@ -98,9 +93,9 @@ const authenticate = async (
           provider.localIdentifier &&
           provider.claimedIdentifier != provider.localIdentifier
 
-        await openid.saveDiscoveredInformation(
+        await saveDiscoveredInformation(
           useLocalIdentifierAsKey
-            ? provider.localIdentifier
+            ? (provider.localIdentifier as string)
             : provider.claimedIdentifier,
           provider,
         )
@@ -135,7 +130,7 @@ const authenticate = async (
     } else {
       return associate(currentProvider, strict).then(function(answer) {
         if (!answer || answer.error) {
-          return chooseProvider(error || answer.error, null)
+          return chooseProvider(error || answer.error)
         } else {
           return _requestAuthentication(
             currentProvider,
@@ -145,23 +140,15 @@ const authenticate = async (
             immediate,
             extensions || [],
           ).then(
-            r => chooseProvider(null, r),
+            r => chooseProvider(undefined, r),
             e => chooseProvider(e),
           )
         }
       })
     }
   }
-  return chooseProvider(null, '')
+  return chooseProvider(undefined, '')
 }
-
-const verifyAssertion = (
-  requestOrUrl: string,
-  returnUrl: string,
-  stateless: boolean,
-  extensions: any[],
-  strict: boolean,
-) => {}
 
 var _btwoc = function(i: string) {
   if (i.charCodeAt(0) > 127) {
@@ -213,23 +200,23 @@ var _xor = function(a: string, b: string) {
 }
 
 async function saveAssociation(
-  provider,
-  type,
-  handle,
-  secret,
-  expiry_time_in_seconds,
+  provider: Provider,
+  type: string,
+  handle: string,
+  secret: string,
+  expiry_time_in_seconds: number,
 ) {
   setTimeout(function() {
-    openid.removeAssociation(handle)
+    removeAssociation(handle)
   }, expiry_time_in_seconds * 1000)
   _associations[handle] = { provider: provider, type: type, secret: secret }
 }
 
-function loadAssociation(handle) {
+async function loadAssociation(handle: string) {
   return _associations[handle] || null
 }
 
-openid.removeAssociation = function(handle) {
+function removeAssociation(handle: string) {
   delete _associations[handle]
   return true
 }
@@ -237,13 +224,8 @@ openid.removeAssociation = function(handle) {
 const saveDiscoveredInformation = function(key: string, provider: Provider) {
   _discoveries[key] = provider
 }
-
-openid.loadDiscoveredInformation = function(key, callback) {
-  if (!_isDef(_discoveries[key])) {
-    return callback(null, null)
-  }
-
-  return callback(null, _discoveries[key])
+const loadDiscoveredInformation = async function(key: string) {
+  return _discoveries[key] || null
 }
 
 const _buildUrl = (endpoint: string, params: object) => {
@@ -253,7 +235,7 @@ const _buildUrl = (endpoint: string, params: object) => {
   return url.format(theUrl)
 }
 
-const _get = (getUrl: string, params: object, redirects = 5) => {
+const _get = (getUrl: string, params: object = {}, redirects = 5) => {
   return axios.get(getUrl, {
     params: params,
     maxRedirects: redirects,
@@ -270,9 +252,9 @@ var _post = (postUrl: string, data: object, redirects = 5) => {
   })
 }
 
-var _decodePostData = function(data) {
+var _decodePostData = function(data: string) {
   var lines = data.split('\n')
-  var result = {}
+  var result: any = {}
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i]
     if (line.length > 0 && line[line.length - 1] == '\r') {
@@ -290,9 +272,11 @@ var _decodePostData = function(data) {
   return result
 }
 
-var _normalizeIdentifier = function(identifier) {
+var _normalizeIdentifier = function(identifier: string) {
   identifier = identifier.replace(/^\s+|\s+$/g, '')
-  if (!identifier) return null
+  if (!identifier) {
+    throw new Error('identifier is required')
+  }
   if (identifier.indexOf('xri://') === 0) {
     identifier = identifier.substring(6)
   }
@@ -307,16 +291,19 @@ var _normalizeIdentifier = function(identifier) {
   return 'http://' + identifier
 }
 
-var _parseXrds = function(xrdsUrl: string, xrdsData): Provider[] {
+var _parseXrds = function(
+  xrdsUrl: string,
+  xrdsData: string,
+): Provider[] | null {
   var services = xrds.parse(xrdsData)
   if (services == null) {
     return null
   }
 
-  var providers = []
+  var providers: Provider[] = []
   for (var i = 0, len = services.length; i < len; ++i) {
     var service = services[i]
-    var provider: Partial<Provider> = {}
+    var provider: Provider = {} as any
 
     provider.endpoint = service.uri
     if (/https?:\/\/xri./.test(xrdsUrl)) {
@@ -358,7 +345,7 @@ var _matchMetaTag = function(html: string) {
   return contentMatches[1]
 }
 
-var _matchLinkTag = function(html, rel) {
+var _matchLinkTag = function(html: string, rel: string) {
   var providerLinkMatches = new RegExp(
     '<link\\s+.*?rel=["\'][^"\']*?' + rel + '[^"\']*?["\'].*?>',
     'ig',
@@ -415,7 +402,7 @@ async function _parseHtml(
   }
 }
 
-function _parseHostMeta(hostMeta: string): Promise<Provider[] | null> {
+async function _parseHostMeta(hostMeta: string): Promise<Provider[] | null> {
   var match = /^Link: <([^\n\r]+?)>;/.exec(hostMeta)
   if (match != null && match.length > 0) {
     var xriUrl = match[1]
@@ -433,14 +420,14 @@ async function _resolveXri(
     return null
   }
 
-  const { headers, data, status: statusCode } = await _get(xriUrl, null)
+  const { headers, data, status: statusCode } = await _get(xriUrl)
   if (statusCode != 200) {
     return null
   }
 
   var xrdsLocation = headers['x-xrds-location']
   if (_isDef(xrdsLocation)) {
-    return _get(xrdsLocation, null).then(({ status, data }) => {
+    return _get(xrdsLocation).then(({ status, data }) => {
       if (status != 200 || data == null) {
         return null
       } else {
@@ -461,21 +448,22 @@ async function _resolveXri(
       return _resolveHtml(xriUrl, hops + 1, data)
     }
   }
+  return null
 }
 
 async function _resolveHtml(
   identifier: string,
   hops: number = 1,
-  data: string = null,
+  data: string = '',
 ): Promise<Provider[] | null> {
   if (hops >= 5) {
     return null
   }
 
   if (data == null) {
-    return _get(identifier, null).then(({ data, status }) => {
+    return _get(identifier).then(({ data, status }) => {
       if (status != 200 || data == null) {
-        return
+        return null
       } else {
         return _parseHtml(identifier, data, hops + 1)
       }
@@ -488,8 +476,8 @@ async function _resolveHtml(
 async function _resolveHostMeta(
   identifier: string,
   strict: boolean,
-  fallBackToProxy,
-) {
+  fallBackToProxy: boolean = false,
+): Promise<Provider[] | null> {
   var host = url.parse(identifier)
   var hostMetaUrl
   if (fallBackToProxy && !strict) {
@@ -501,31 +489,29 @@ async function _resolveHostMeta(
   if (!hostMetaUrl) {
     return null
   } else {
-    return _get(hostMetaUrl, null).then(
-      async ({ data, status: statusCode }) => {
-        if (statusCode != 200 || data == null) {
-          if (!fallBackToProxy && !strict) {
-            return _resolveHostMeta(identifier, strict, true)
-          } else {
-            return null
-          }
+    return _get(hostMetaUrl).then(async ({ data, status: statusCode }) => {
+      if (statusCode != 200 || data == null) {
+        if (!fallBackToProxy && !strict) {
+          return _resolveHostMeta(identifier, strict, true)
         } else {
-          //Attempt to parse the data but if this fails it may be because
-          //the response to hostMetaUrl was some other http/html resource.
-          //Therefore fallback to the proxy if no providers are found.
-          const providers = await _parseHostMeta(data)
-          if (
-            (providers == null || providers.length == 0) &&
-            !fallBackToProxy &&
-            !strict
-          ) {
-            return _resolveHostMeta(identifier, strict, true)
-          } else {
-            return providers
-          }
+          return null
         }
-      },
-    )
+      } else {
+        //Attempt to parse the data but if this fails it may be because
+        //the response to hostMetaUrl was some other http/html resource.
+        //Therefore fallback to the proxy if no providers are found.
+        const providers = await _parseHostMeta(data)
+        if (
+          (providers == null || providers.length == 0) &&
+          !fallBackToProxy &&
+          !strict
+        ) {
+          return _resolveHostMeta(identifier, strict, true)
+        } else {
+          return providers
+        }
+      }
+    })
   }
 }
 
@@ -549,9 +535,7 @@ const discover = async (
       // Fallback to HTML discovery
       return _resolveHtml(identifier).then(function(providers) {
         if (providers == null || providers.length == 0) {
-          _resolveHostMeta(identifier, strict, function(providers) {
-            return providers
-          })
+          return _resolveHostMeta(identifier, strict) as any
         } else {
           return providers
         }
@@ -574,7 +558,7 @@ const discover = async (
   })
 }
 
-var _createDiffieHellmanKeyExchange = function(algorithm) {
+var _createDiffieHellmanKeyExchange = function(algorithm: string) {
   var defaultPrime =
     'ANz5OguIOXLsDhmYmsWizjEOHTdxfo2Vcbt2I3MYZuYe91ouJ4mLBX+YkcLiemOcPym2CBRYHNOyyjmG0mg3BVd9RcLn5S3IHHoXGHblzqdLFEi/368Ygo79JRnxTkXjgmY0rxlJ5bU1zIKaSDuKdiI+XUkKJX8Fvf8W8vsixYOr'
 
@@ -589,18 +573,18 @@ async function associate(
   provider: Provider,
   strict: boolean,
   algorithm: string = 'DH-SHA256',
-) {
+): Promise<any> {
   var params = _generateAssociationRequestParameters(
     provider.version,
     algorithm,
   )
-  var dh = null
+  let dh: crypto.DiffieHellman
   if (algorithm.indexOf('no-encryption') === -1) {
     dh = _createDiffieHellmanKeyExchange(algorithm)
-    params['openid.dh_modulus'] = _bigIntToBase64(dh.getPrime('binary'))
-    params['openid.dh_gen'] = _bigIntToBase64(dh.getGenerator('binary'))
+    params['openid.dh_modulus'] = _bigIntToBase64(dh.getPrime().toString())
+    params['openid.dh_gen'] = _bigIntToBase64(dh.getGenerator().toString())
     params['openid.dh_consumer_public'] = _bigIntToBase64(
-      dh.getPublicKey('binary'),
+      dh.getPublicKey().toString(),
     )
   }
 
@@ -665,13 +649,11 @@ async function associate(
         if (algorithm.indexOf('no-encryption') !== -1) {
           secret = data.mac_key
         } else {
-          var serverPublic = _bigIntFromBase64(data.dh_server_public)
-          var sharedSecret = _btwoc(
-            dh.computeSecret(serverPublic, 'binary', 'binary'),
-          )
+          var serverPublic = Buffer.from(data.dh_server_public, 'base64')
+          var sharedSecret = _btwoc(dh.computeSecret(serverPublic).toString())
           var hash = crypto.createHash(hashAlgorithm)
           hash.update(Buffer.from(sharedSecret, 'binary'))
-          sharedSecret = hash.digest()
+          sharedSecret = hash.digest().toString()
           var encMacKey = _base64decode(data.enc_mac_key)
           secret = _base64encode(_xor(encMacKey, sharedSecret))
         }
@@ -699,9 +681,9 @@ function _generateAssociationRequestParameters(
   version: string,
   algorithm: string,
 ) {
-  var params = {
+  var params: AssociationRequestParams = {
     'openid.mode': 'associate',
-  }
+  } as any
 
   if (version.indexOf('2.0') !== -1) {
     params['openid.ns'] = 'http://specs.openid.net/auth/2.0'
@@ -731,24 +713,17 @@ function _generateAssociationRequestParameters(
   return params
 }
 
-interface Provider {
-  version: string
-  endpoint: string
-  claimedIdentifier: string
-  localIdentifier: string
-}
-
 const _requestAuthentication = async (
   provider: Provider,
-  assoc_handle: string,
+  assoc_handle: string | null,
   returnUrl: string,
   realm: string | null,
   immediate: boolean,
   extensions: any[],
 ) => {
-  var params: object = {
+  var params: RequsetParams = {
     'openid.mode': immediate ? 'checkid_immediate' : 'checkid_setup',
-  }
+  } as any
 
   if (provider.version.indexOf('2.0') !== -1) {
     params['openid.ns'] = 'http://specs.openid.net/auth/2.0'
@@ -764,6 +739,7 @@ const _requestAuthentication = async (
       if (!hasOwnProperty(extension.requestParams, key)) {
         continue
       }
+      // @ts-ignore
       params[key] = extension.requestParams[key]
     }
   }
@@ -807,75 +783,38 @@ const _requestAuthentication = async (
   return _buildUrl(provider.endpoint, params)
 }
 
-openid.verifyAssertion = function(
-  requestOrUrl,
-  originalReturnUrl,
-  callback,
-  stateless,
-  extensions,
-  strict,
+function verifyAssertion(
+  requestOrUrl: string,
+  originalReturnUrl: string,
+  stateless: boolean,
+  extensions: any[],
+  strict: boolean,
 ) {
   extensions = extensions || {}
-  var assertionUrl = requestOrUrl
-  if (typeof requestOrUrl !== typeof '') {
-    if (requestOrUrl.method.toUpperCase() == 'POST') {
-      if (
-        (requestOrUrl.headers['content-type'] || '')
-          .toLowerCase()
-          .indexOf('application/x-www-form-urlencoded') === 0
-      ) {
-        // POST response received
-        var data = ''
 
-        requestOrUrl.on('data', function(chunk) {
-          data += chunk
-        })
-
-        requestOrUrl.on('end', function() {
-          var params = querystring.parse(data)
-          return _verifyAssertionData(
-            params,
-            callback,
-            stateless,
-            extensions,
-            strict,
-          )
-        })
-      } else {
-        return callback({
-          message: 'Invalid POST response from OpenID provider',
-        })
-      }
-
-      return // Avoid falling through to GET method assertion
-    } else if (requestOrUrl.method.toUpperCase() != 'GET') {
-      return callback({
-        message: 'Invalid request method from OpenID provider',
-      })
-    }
-    assertionUrl = requestOrUrl.url
-  }
-
-  assertionUrl = url.parse(assertionUrl, true)
+  const assertionUrl = url.parse(requestOrUrl, true)
   var params = assertionUrl.query
 
   if (!_verifyReturnUrl(assertionUrl, originalReturnUrl)) {
-    return callback({ message: 'Invalid return URL' })
+    throw new Error('Invalid return URL')
   }
-  return _verifyAssertionData(params, callback, stateless, extensions, strict)
+  return _verifyAssertionData(params, stateless, extensions, strict)
 }
 
-var _verifyReturnUrl = function(assertionUrl, originalReturnUrl) {
-  var receivedReturnUrl = assertionUrl.query['openid.return_to']
-  if (!_isDef(receivedReturnUrl)) {
+var _verifyReturnUrl = function(
+  assertionUrl: url.UrlWithParsedQuery,
+  _originalReturnUrl: string,
+) {
+  var _receivedReturnUrl = assertionUrl.query['openid.return_to']
+  if (!_isDef(_receivedReturnUrl)) {
     return false
   }
 
-  receivedReturnUrl = url.parse(receivedReturnUrl, true)
+  const receivedReturnUrl = url.parse(_receivedReturnUrl as string, true)
   if (!receivedReturnUrl) {
     return false
   }
-  originalReturnUrl = url.parse(originalReturnUrl, true)
+  const originalReturnUrl = url.parse(_originalReturnUrl, true)
   if (!originalReturnUrl) {
     return false
   }
@@ -903,35 +842,29 @@ var _verifyReturnUrl = function(assertionUrl, originalReturnUrl) {
   return true
 }
 
-var _verifyAssertionData = function(
-  params,
-  callback,
-  stateless,
-  extensions,
-  strict,
+function _verifyAssertionData(
+  params: any,
+  stateless: boolean,
+  extensions: any[],
+  strict: boolean,
 ) {
   var assertionError = _getAssertionError(params)
   if (assertionError) {
-    return callback({ message: assertionError }, { authenticated: false })
+    throw new Error(assertionError)
   }
 
   if (!_invalidateAssociationHandleIfRequested(params)) {
-    return callback({ message: 'Unable to invalidate association handle' })
+    throw new Error('Unable to invalidate association handle')
   }
 
   if (!_checkNonce(params)) {
-    return callback({ message: 'Invalid or replayed nonce' })
+    throw new Error('Invalid or replayed nonce')
   }
 
-  _verifyDiscoveredInformation(params, stateless, extensions, strict, function(
-    error,
-    result,
-  ) {
-    return callback(error, result)
-  })
+  return _verifyDiscoveredInformation(params, stateless, extensions, strict)
 }
 
-var _getAssertionError = function(params) {
+var _getAssertionError = function(params: AssociationRequestParams) {
   if (!_isDef(params)) {
     return 'Assertion request is malformed'
   } else if (params['openid.mode'] == 'error') {
@@ -943,12 +876,14 @@ var _getAssertionError = function(params) {
   return null
 }
 
-var _invalidateAssociationHandleIfRequested = function(params) {
+var _invalidateAssociationHandleIfRequested = function(
+  params: AssociationRequestParams,
+) {
   if (
     params['is_valid'] == 'true' &&
     _isDef(params['openid.invalidate_handle'])
   ) {
-    if (!openid.removeAssociation(params['openid.invalidate_handle'])) {
+    if (!removeAssociation(params['openid.invalidate_handle'])) {
       return false
     }
   }
@@ -956,7 +891,7 @@ var _invalidateAssociationHandleIfRequested = function(params) {
   return true
 }
 
-var _checkNonce = function(params: object) {
+var _checkNonce = function(params: AssociationRequestParams) {
   if (!_isDef(params['openid.ns'])) {
     return true // OpenID 1.1 has no nonce
   }
@@ -1009,13 +944,12 @@ var _removeOldNonces = function() {
 }
 
 var _verifyDiscoveredInformation = function(
-  params,
-  stateless,
-  extensions,
-  strict,
-  callback,
+  params: RequsetParams,
+  stateless: boolean,
+  extensions: any[],
+  strict: boolean,
 ) {
-  var claimedIdentifier = params['openid.claimed_id']
+  var claimedIdentifier = params['openid.claimed_id'] as string
   var useLocalIdentifierAsKey = false
   if (!_isDef(claimedIdentifier)) {
     if (!_isDef(params['openid.ns'])) {
@@ -1027,69 +961,57 @@ var _verifyDiscoveredInformation = function(
       // OpenID 2.0+:
       // If there is no claimed identifier, then the
       // assertion is not about an identity
-      return callback(null, { authenticated: false })
+      return { authenticated: false }
     }
   }
 
   if (useLocalIdentifierAsKey) {
-    claimedIdentifier = params['openid.identity']
+    claimedIdentifier = params['openid.identity'] as string
   }
 
   claimedIdentifier = _getCanonicalClaimedIdentifier(claimedIdentifier)
-  openid.loadDiscoveredInformation(claimedIdentifier, function(
-    error,
-    provider,
-  ) {
-    if (error) {
-      return callback({
-        message:
-          'An error occured when loading previously discovered information about the claimed identifier',
-      })
-    }
-
-    if (provider) {
-      return _verifyAssertionAgainstProviders(
-        [provider],
-        params,
-        stateless,
-        extensions,
-        callback,
-      )
-    } else if (useLocalIdentifierAsKey) {
-      return callback({
-        message:
-          'OpenID 1.0/1.1 response received, but no information has been discovered about the provider. It is likely that this is a fraudulent authentication response.',
-      })
-    }
-
-    openid.discover(claimedIdentifier, strict, function(error, providers) {
-      if (error) {
-        return callback(error)
-      }
-      if (!providers || !providers.length) {
-        return callback({
-          message:
-            'No OpenID provider was discovered for the asserted claimed identifier',
-        })
-      }
-
-      _verifyAssertionAgainstProviders(
-        providers,
-        params,
-        stateless,
-        extensions,
-        callback,
+  return loadDiscoveredInformation(claimedIdentifier as string)
+    .catch(err => {
+      throw new Error(
+        'An error occured when loading previously discovered information about the claimed identifier',
       )
     })
-  })
+    .then(function(provider) {
+      if (provider) {
+        return _verifyAssertionAgainstProviders(
+          [provider],
+          params,
+          stateless,
+          extensions,
+        )
+      } else if (useLocalIdentifierAsKey) {
+        throw new Error(
+          'OpenID 1.0/1.1 response received, but no information has been discovered about the provider. It is likely that this is a fraudulent authentication response.',
+        )
+      }
+
+      return discover(claimedIdentifier, strict).then(function(providers) {
+        if (!providers || !providers.length) {
+          throw new Error(
+            'No OpenID provider was discovered for the asserted claimed identifier',
+          )
+        }
+
+        return _verifyAssertionAgainstProviders(
+          providers,
+          params,
+          stateless,
+          extensions,
+        )
+      })
+    })
 }
 
 var _verifyAssertionAgainstProviders = function(
-  providers,
-  params,
-  stateless,
-  extensions,
-  callback,
+  providers: Provider[],
+  params: RequsetParams,
+  stateless: boolean,
+  extensions: any[],
 ) {
   for (var i = 0; i < providers.length; ++i) {
     var provider = providers[i]
@@ -1107,13 +1029,12 @@ var _verifyAssertionAgainstProviders = function(
       }
       if (provider.claimedIdentifier) {
         var claimedIdentifier = _getCanonicalClaimedIdentifier(
-          params['openid.claimed_id'],
+          params['openid.claimed_id'] as string,
         )
         if (provider.claimedIdentifier != claimedIdentifier) {
-          return callback({
-            message:
-              'Claimed identifier in assertion response does not match discovered claimed identifier',
-          })
+          throw new Error(
+            'Claimed identifier in assertion response does not match discovered claimed identifier',
+          )
         }
       }
     }
@@ -1122,19 +1043,12 @@ var _verifyAssertionAgainstProviders = function(
       !!provider.localIdentifier &&
       provider.localIdentifier != params['openid.identity']
     ) {
-      return callback({
-        message:
-          'Identity in assertion response does not match discovered local identifier',
-      })
+      throw new Error(
+        'Identity in assertion response does not match discovered local identifier',
+      )
     }
 
-    return _checkSignature(params, provider, stateless, function(
-      error,
-      result,
-    ) {
-      if (error) {
-        return callback(error)
-      }
+    return _checkSignature(params, provider, stateless).then(result => {
       if (extensions && result.authenticated) {
         for (var ext in extensions) {
           if (!hasOwnProperty(extensions, ext)) {
@@ -1145,22 +1059,22 @@ var _verifyAssertionAgainstProviders = function(
         }
       }
 
-      return callback(null, result)
+      return result
     })
   }
 
-  callback({
-    message:
-      'No valid providers were discovered for the asserted claimed identifier',
-  })
+  throw new Error(
+    'No valid providers were discovered for the asserted claimed identifier',
+  )
 }
 
-var _checkSignature = function(params, provider, stateless, callback) {
+const _checkSignature = function(
+  params: RequsetParams,
+  provider: Provider,
+  stateless: boolean,
+) {
   if (!_isDef(params['openid.signed']) || !_isDef(params['openid.sig'])) {
-    return callback(
-      { message: 'No signature in response' },
-      { authenticated: false },
-    )
+    throw new Error('No signature in response')
   }
 
   if (stateless) {
@@ -1170,19 +1084,24 @@ var _checkSignature = function(params, provider, stateless, callback) {
   }
 }
 
-function _checkSignatureUsingAssociation(params: object) {
+import {
+  Params,
+  Provider,
+  Association,
+  AssociationRequestParams,
+  AllParams,
+  RequsetParams,
+} from './type'
+
+function _checkSignatureUsingAssociation(params: Params) {
   if (!_isDef(params['openid.assoc_handle'])) {
     throw new Error(
       'No association handle in provider response. Find out whether the provider supports associations and/or use stateless mode.',
     )
   }
-  openid.loadAssociation(params['openid.assoc_handle'], function(
-    error,
+  return loadAssociation(params['openid.assoc_handle'] as string).then(function(
     association,
   ) {
-    if (error) {
-      throw new Error('Error loading association')
-    }
     if (!association) {
       throw new Error('Invalid association handle')
     }
@@ -1194,10 +1113,10 @@ function _checkSignatureUsingAssociation(params: object) {
     }
 
     var message = ''
-    var signedParams = params['openid.signed'].split(',')
+    var signedParams = (params['openid.signed'] as string).split(',')
     for (var i = 0; i < signedParams.length; i++) {
       var param = signedParams[i]
-      var value = params['openid.' + param]
+      var value = params[('openid.' + param) as keyof Params]
       if (!_isDef(value)) {
         throw new Error(
           'At least one parameter referred in signature is not present in response',
@@ -1227,12 +1146,16 @@ function _checkSignatureUsingAssociation(params: object) {
   })
 }
 
-function _checkSignatureUsingProvider(params: object, provider: Provider) {
+function _checkSignatureUsingProvider(
+  params: RequsetParams,
+  provider: Provider,
+) {
   var requestParams = {
     'openid.mode': 'check_authentication',
   }
   for (var key in params) {
     if (hasOwnProperty(params, key) && key != 'openid.mode') {
+      // @ts-ignore
       requestParams[key] = params[key]
     }
   }
@@ -1262,7 +1185,7 @@ function _checkSignatureUsingProvider(params: object, provider: Provider) {
   })
 }
 
-var _getCanonicalClaimedIdentifier = function(claimedIdentifier) {
+var _getCanonicalClaimedIdentifier = function(claimedIdentifier: string) {
   if (!claimedIdentifier) {
     return claimedIdentifier
   }
@@ -1273,317 +1196,4 @@ var _getCanonicalClaimedIdentifier = function(claimedIdentifier) {
   }
 
   return claimedIdentifier
-}
-
-/* ==================================================================
- * Extensions
- * ==================================================================
- */
-
-var _getExtensionAlias = function(params, ns) {
-  for (var k in params) if (params[k] == ns) return k.replace('openid.ns.', '')
-}
-
-/*
- * Simple Registration Extension
- * http://openid.net/specs/openid-simple-registration-extension-1_1-01.html
- */
-
-var sreg_keys = [
-  'nickname',
-  'email',
-  'fullname',
-  'dob',
-  'gender',
-  'postcode',
-  'country',
-  'language',
-  'timezone',
-]
-
-openid.SimpleRegistration = function SimpleRegistration(options) {
-  this.requestParams = {
-    'openid.ns.sreg': 'http://openid.net/extensions/sreg/1.1',
-  }
-  if (options.policy_url)
-    this.requestParams['openid.sreg.policy_url'] = options.policy_url
-  var required = []
-  var optional = []
-  for (var i = 0; i < sreg_keys.length; i++) {
-    var key = sreg_keys[i]
-    if (options[key]) {
-      if (options[key] == 'required') {
-        required.push(key)
-      } else {
-        optional.push(key)
-      }
-    }
-    if (required.length) {
-      this.requestParams['openid.sreg.required'] = required.join(',')
-    }
-    if (optional.length) {
-      this.requestParams['openid.sreg.optional'] = optional.join(',')
-    }
-  }
-}
-
-openid.SimpleRegistration.prototype.fillResult = function(params, result) {
-  var extension =
-    _getExtensionAlias(params, 'http://openid.net/extensions/sreg/1.1') ||
-    'sreg'
-  for (var i = 0; i < sreg_keys.length; i++) {
-    var key = sreg_keys[i]
-    if (params['openid.' + extension + '.' + key]) {
-      result[key] = params['openid.' + extension + '.' + key]
-    }
-  }
-}
-
-/*
- * User Interface Extension
- * http://svn.openid.net/repos/specifications/user_interface/1.0/trunk/openid-user-interface-extension-1_0.html
- */
-openid.UserInterface = function UserInterface(options) {
-  if (typeof options != 'object') {
-    options = { mode: options || 'popup' }
-  }
-
-  this.requestParams = {
-    'openid.ns.ui': 'http://specs.openid.net/extensions/ui/1.0',
-  }
-  for (var k in options) {
-    this.requestParams['openid.ui.' + k] = options[k]
-  }
-}
-
-openid.UserInterface.prototype.fillResult = function(params, result) {
-  // TODO: Fill results
-}
-
-/*
- * Attribute Exchange Extension
- * http://openid.net/specs/openid-attribute-exchange-1_0.html
- * Also see:
- *  - http://www.axschema.org/types/
- *  - http://code.google.com/intl/en-US/apis/accounts/docs/OpenID.html#Parameters
- */
-
-var attributeMapping = {
-  'http://axschema.org/contact/country/home': 'country',
-  'http://axschema.org/contact/email': 'email',
-  'http://axschema.org/namePerson/first': 'firstname',
-  'http://axschema.org/pref/language': 'language',
-  'http://axschema.org/namePerson/last': 'lastname',
-  // The following are not in the Google document:
-  'http://axschema.org/namePerson/friendly': 'nickname',
-  'http://axschema.org/namePerson': 'fullname',
-}
-
-openid.AttributeExchange = function AttributeExchange(options) {
-  this.requestParams = {
-    'openid.ns.ax': 'http://openid.net/srv/ax/1.0',
-    'openid.ax.mode': 'fetch_request',
-  }
-  var required = []
-  var optional = []
-  for (var ns in options) {
-    if (!hasOwnProperty(options, ns)) {
-      continue
-    }
-    if (options[ns] == 'required') {
-      required.push(ns)
-    } else {
-      optional.push(ns)
-    }
-  }
-  var self = this
-  required = required.map(function(ns, i) {
-    var attr = attributeMapping[ns] || 'req' + i
-    self.requestParams['openid.ax.type.' + attr] = ns
-    return attr
-  })
-  optional = optional.map(function(ns, i) {
-    var attr = attributeMapping[ns] || 'opt' + i
-    self.requestParams['openid.ax.type.' + attr] = ns
-    return attr
-  })
-  if (required.length) {
-    this.requestParams['openid.ax.required'] = required.join(',')
-  }
-  if (optional.length) {
-    this.requestParams['openid.ax.if_available'] = optional.join(',')
-  }
-}
-
-openid.AttributeExchange.prototype.fillResult = function(params, result) {
-  var extension =
-    _getExtensionAlias(params, 'http://openid.net/srv/ax/1.0') || 'ax'
-  var regex = new RegExp(
-    '^openid\\.' +
-      extension +
-      '\\.(value|type|count)\\.(\\w+)(\\.(\\d+)){0,1}$',
-  )
-  var aliases = {}
-  var counters = {}
-  var values = {}
-  for (var k in params) {
-    if (!hasOwnProperty(params, k)) {
-      continue
-    }
-    var matches = k.match(regex)
-    if (!matches) {
-      continue
-    }
-    if (matches[1] == 'type') {
-      aliases[params[k]] = matches[2]
-    } else if (matches[1] == 'count') {
-      //counter sanitization
-      var count = parseInt(params[k], 10)
-
-      // values number limitation (potential attack by overflow ?)
-      counters[matches[2]] =
-        count < AX_MAX_VALUES_COUNT ? count : AX_MAX_VALUES_COUNT
-    } else {
-      if (matches[3]) {
-        //matches multi-value, aka "count" aliases
-
-        //counter sanitization
-        var count = parseInt(matches[4], 10)
-
-        // "in bounds" verification
-        if (
-          count > 0 &&
-          count <= (counters[matches[2]] || AX_MAX_VALUES_COUNT)
-        ) {
-          if (!values[matches[2]]) {
-            values[matches[2]] = []
-          }
-          values[matches[2]][count - 1] = params[k]
-        }
-      } else {
-        //matches single-value aliases
-        values[matches[2]] = params[k]
-      }
-    }
-  }
-  for (var ns in aliases) {
-    if (aliases[ns] in values) {
-      result[aliases[ns]] = values[aliases[ns]]
-      result[ns] = values[aliases[ns]]
-    }
-  }
-}
-
-openid.OAuthHybrid = function(options) {
-  this.requestParams = {
-    'openid.ns.oauth': 'http://specs.openid.net/extensions/oauth/1.0',
-    'openid.oauth.consumer': options['consumerKey'],
-    'openid.oauth.scope': options['scope'],
-  }
-}
-
-openid.OAuthHybrid.prototype.fillResult = function(params, result) {
-  var extension =
-      _getExtensionAlias(
-        params,
-        'http://specs.openid.net/extensions/oauth/1.0',
-      ) || 'oauth',
-    token_attr = 'openid.' + extension + '.request_token'
-
-  if (params[token_attr] !== undefined) {
-    result['request_token'] = params[token_attr]
-  }
-}
-
-/*
- * Provider Authentication Policy Extension (PAPE)
- * http://openid.net/specs/openid-provider-authentication-policy-extension-1_0.html
- *
- * Note that this extension does not validate that the provider is obeying the
- * authentication request, it only allows the request to be made.
- *
- * TODO: verify requested 'max_auth_age' against response 'auth_time'
- * TODO: verify requested 'auth_level.ns.<cust>' (etc) against response 'auth_level.ns.<cust>'
- * TODO: verify requested 'preferred_auth_policies' against response 'auth_policies'
- *
- */
-
-/* Just the keys that aren't open to customisation */
-var pape_request_keys = [
-  'max_auth_age',
-  'preferred_auth_policies',
-  'preferred_auth_level_types',
-]
-var pape_response_keys = ['auth_policies', 'auth_time']
-
-/* Some short-hand mappings for auth_policies */
-
-var papePolicyNameMap = {
-  'phishing-resistant':
-    'http://schemas.openid.net/pape/policies/2007/06/phishing-resistant',
-  'multi-factor':
-    'http://schemas.openid.net/pape/policies/2007/06/multi-factor',
-  'multi-factor-physical':
-    'http://schemas.openid.net/pape/policies/2007/06/multi-factor-physical',
-  none: 'http://schemas.openid.net/pape/policies/2007/06/none',
-}
-
-openid.PAPE = function PAPE(options) {
-  this.requestParams = {
-    'openid.ns.pape': 'http://specs.openid.net/extensions/pape/1.0',
-  }
-  for (var k in options) {
-    if (k === 'preferred_auth_policies') {
-      this.requestParams['openid.pape.' + k] = _getLongPolicyName(options[k])
-    } else {
-      this.requestParams['openid.pape.' + k] = options[k]
-    }
-  }
-  var util = require('util')
-}
-
-/* you can express multiple pape 'preferred_auth_policies', so replace each
- * with the full policy URI as per papePolicyNameMapping.
- */
-var _getLongPolicyName = function(policyNames) {
-  var policies = policyNames.split(' ')
-  for (var i = 0; i < policies.length; i++) {
-    if (policies[i] in papePolicyNameMap) {
-      policies[i] = papePolicyNameMap[policies[i]]
-    }
-  }
-  return policies.join(' ')
-}
-
-var _getShortPolicyName = function(policyNames) {
-  var policies = policyNames.split(' ')
-  let shortName: string
-  for (var i = 0; i < policies.length; i++) {
-    for (shortName in papePolicyNameMap) {
-      if (papePolicyNameMap[shortName] === policies[i]) {
-        policies[i] = shortName
-      }
-    }
-  }
-  return policies.join(' ')
-}
-
-openid.PAPE.prototype.fillResult = function(params, result) {
-  var extension =
-    _getExtensionAlias(params, 'http://specs.openid.net/extensions/pape/1.0') ||
-    'pape'
-  var paramString = 'openid.' + extension + '.'
-  var thisParam
-  for (var p in params) {
-    if (hasOwnProperty(params, p)) {
-      if (p.substr(0, paramString.length) === paramString) {
-        thisParam = p.substr(paramString.length)
-        if (thisParam === 'auth_policies') {
-          result[thisParam] = _getShortPolicyName(params[p])
-        } else {
-          result[thisParam] = params[p]
-        }
-      }
-    }
-  }
 }
