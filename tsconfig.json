@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "outDir": "dist",
+    "module": "commonjs",
+    "moduleResolution": "Node",
+    "lib": ["ScriptHost", "ESNext"],
+    "esModuleInterop": true,
+    "strict": true,
+    "declaration": true
+  },
+  "exclude": ["src/__tests__"],
+  "include": ["src"]
+}
